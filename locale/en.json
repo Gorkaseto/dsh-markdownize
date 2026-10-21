@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Markdownize",
+    "description": "Converts documents (PDF, Word, PowerPoint, Excel, HTML, CSV, JSON, ZIP…) to Markdown so the model can read them as text. Uses its own bundled JavaScript engine, or Microsoft MarkItDown when it is installed."
+  }
+}

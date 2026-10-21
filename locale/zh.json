@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Markdownize",
+    "description": "将文档（PDF、Word、PowerPoint、Excel、HTML、CSV、JSON、ZIP 等）转换为 Markdown，便于模型以文本形式阅读。使用自带的 JavaScript 引擎，或在已安装时使用 Microsoft MarkItDown。"
+  }
+}

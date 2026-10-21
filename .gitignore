@@ -1,0 +1,17 @@
+# Dependencies (only needed to rebuild vendor/; vendor/ itself is committed)
+node_modules/
+
+# Local Claude Code settings
+.claude/settings.local.json
+
+# Logs and packs
+*.log
+npm-debug.log*
+*.tgz
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

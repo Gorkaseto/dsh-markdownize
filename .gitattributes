@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.svg text eol=lf
+
+# Generated bundles (build-vendor.mjs): committed, but not diffed or counted.
+vendor/** -diff linguist-generated=true
+package-lock.json -diff

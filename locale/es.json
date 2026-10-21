@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Markdownize",
+    "description": "Convierte documentos (PDF, Word, PowerPoint, Excel, HTML, CSV, JSON, ZIP…) a Markdown para que el modelo pueda leerlos como texto. Usa su propio motor JavaScript incluido, o Microsoft MarkItDown cuando está instalado."
+  }
+}

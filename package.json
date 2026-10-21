@@ -1,0 +1,65 @@
+{
+  "name": "dsh-markdownize",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "author": "gorkaseto",
+  "description": "Converts documents (PDF, Word, PowerPoint, Excel, HTML, CSV, JSON, ZIP…) to Markdown so LLMs can read them. Bundled JavaScript engine, or Microsoft MarkItDown when installed.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "convert.js",
+    "engine.js",
+    "vendor",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build": "node build-vendor.mjs"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "deepseek-harness",
+    "markdown",
+    "markitdown"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-sidebar-right"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "*"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.10",
+    "exceljs": "^4.4.0",
+    "fast-xml-parser": "^4.5.0",
+    "jszip": "^3.10.1",
+    "mammoth": "^1.8.0",
+    "turndown": "^7.2.0",
+    "turndown-plugin-gfm": "^1.0.2",
+    "unpdf": "^0.12.0"
+  }
+}
