@@ -17,6 +17,7 @@
     "client.js",
     "convert.js",
     "engine.js",
+    "images.js",
     "vendor",
     "cordis.patch.yml",
     "locale/*.json",

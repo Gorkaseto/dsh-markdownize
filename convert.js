@@ -1,8 +1,11 @@
 // Core document → Markdown conversion. No Python, no network, no child processes.
 // Mirrors MarkItDown's offline converters: DOCX, PPTX, XLSX, PDF, HTML, CSV/JSON/XML/text, ZIP.
+// Images embedded in DOCX and PPTX are collected (see images.js) and leave a sentinel in the text.
 // Third-party libs come pre-bundled (see build-vendor.mjs): local plugins are installed as
 // `link:` symlinks, so their npm dependencies are never installed.
+import { posix } from 'node:path'
 import { JSZip, mammoth, TurndownService, gfm, XMLParser, ExcelJS } from './vendor/deps.js'
+import { addImage } from './images.js'
 
 const MAX_ZIP_ENTRIES = 200
 const MAX_ZIP_BYTES = 50 * 1024 * 1024 // total uncompressed budget (zip-bomb guard)
@@ -10,6 +13,11 @@ const MAX_ZIP_BYTES = 50 * 1024 * 1024 // total uncompressed budget (zip-bomb gu
 const td = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', bulletListMarker: '-' })
 td.use(gfm)
 td.remove(['script', 'style'])
+// DOCX images arrive as <img src="dsh-image:SENTINEL"> (see docx below); keep the sentinel as is.
+td.addRule('dsh-image', {
+  filter: (node) => node.nodeName === 'IMG' && (node.getAttribute('src') ?? '').startsWith('dsh-image:'),
+  replacement: (_content, node) => node.getAttribute('src').slice('dsh-image:'.length),
+})
 
 const xml = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: '@_', preserveOrder: false })
 
@@ -68,8 +76,12 @@ function normalizeTables(html) {
   })
 }
 
-async function docx(buf) {
-  const { value: html } = await mammoth.convertToHtml({ buffer: buf })
+async function docx(buf, images) {
+  // Without convertImage mammoth inlines every image as a base64 data URI.
+  const convertImage = mammoth.images.imgElement(async (image) => ({
+    src: `dsh-image:${addImage(images, await image.read(), image.altText)}`,
+  }))
+  const { value: html } = await mammoth.convertToHtml({ buffer: buf }, { convertImage })
   return td.turndown(normalizeTables(html))
 }
 
@@ -111,7 +123,45 @@ function collectText(node, acc = []) {
   return acc
 }
 
-async function pptx(buf) {
+// Every <p:pic> under `node` (pictures may sit inside group shapes).
+function collectPictures(node, acc = []) {
+  if (node == null || typeof node !== 'object') return acc
+  for (const [k, v] of Object.entries(node)) {
+    if (k === 'p:pic') arr(v).forEach((pic) => acc.push({
+      alt: pic?.['p:nvPicPr']?.['p:cNvPr']?.['@_descr'] ?? '',
+      rel: pic?.['p:blipFill']?.['a:blip']?.['@_r:embed'],
+    }))
+    else if (typeof v === 'object') arr(v).forEach((c) => collectPictures(c, acc))
+  }
+  return acc
+}
+
+// Relationship id → zip path, from one slide's `_rels` file.
+async function slideTargets(zip, slideName) {
+  const relsName = `${posix.dirname(slideName)}/_rels/${posix.basename(slideName)}.rels`
+  const targets = new Map()
+  if (!zip.files[relsName]) return targets
+  const rels = xml.parse(await zip.files[relsName].async('string'))
+  for (const r of arr(rels?.Relationships?.Relationship)) {
+    if (r['@_TargetMode'] === 'External' || !r['@_Target']) continue
+    targets.set(r['@_Id'], posix.normalize(posix.join(posix.dirname(slideName), r['@_Target'])))
+  }
+  return targets
+}
+
+async function slideImages(zip, slideName, doc, images) {
+  const pictures = collectPictures(doc)
+  if (!pictures.length) return ''
+  const targets = await slideTargets(zip, slideName)
+  const marks = []
+  for (const { alt, rel } of pictures) {
+    const file = zip.files[targets.get(rel)]
+    if (file) marks.push(addImage(images, await file.async('nodebuffer'), alt))
+  }
+  return marks.join('\n')
+}
+
+async function pptx(buf, images) {
   const zip = await JSZip.loadAsync(buf)
   const slides = Object.keys(zip.files)
     .filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n))
@@ -120,12 +170,13 @@ async function pptx(buf) {
   for (const [i, name] of slides.entries()) {
     const doc = xml.parse(await zip.files[name].async('string'))
     const text = collectText(doc).join('').replace(/\n{2,}/g, '\n').trim()
+    const pictures = await slideImages(zip, name, doc, images)
     const notesName = `ppt/notesSlides/notesSlide${name.match(/(\d+)\.xml/)[1]}.xml`
     let notes = ''
     if (zip.files[notesName]) {
       notes = collectText(xml.parse(await zip.files[notesName].async('string'))).join('').replace(/\n{2,}/g, '\n').trim()
     }
-    out.push(`<!-- Slide number: ${i + 1} -->\n${text}${notes ? `\n\n### Notes:\n${notes}` : ''}`)
+    out.push(`<!-- Slide number: ${i + 1} -->\n${text}${pictures ? `\n\n${pictures}` : ''}${notes ? `\n\n### Notes:\n${notes}` : ''}`)
   }
   return out.join('\n\n')
 }
@@ -137,7 +188,7 @@ async function pdf(buf) {
   return text.map((t, i) => `<!-- Page ${i + 1} -->\n${t.trim()}`).join('\n\n')
 }
 
-async function zipFile(buf, depth) {
+async function zipFile(buf, depth, images) {
   const zip = await JSZip.loadAsync(buf)
   const names = Object.keys(zip.files).filter((n) => !zip.files[n].dir)
   if (names.length > MAX_ZIP_ENTRIES) throw new Error(`zip has ${names.length} entries (limit ${MAX_ZIP_ENTRIES})`)
@@ -150,20 +201,28 @@ async function zipFile(buf, depth) {
     const data = await zip.files[n].async('nodebuffer')
     budget -= data.length
     if (budget < 0) throw new Error('zip uncompressed size budget exceeded')
-    out.push(`## File: ${n}\n\n${await convertBuffer(data, n, depth + 1)}`)
+    out.push(`## File: ${n}\n\n${await convertTo(data, n, depth + 1, images)}`)
   }
   return out.join('\n\n')
 }
 
-/** Convert an in-memory file to Markdown. `name` only supplies the extension. */
-export async function convertBuffer(buf, name, depth = 0) {
+/**
+ * Convert an in-memory file to Markdown. `name` only supplies the extension.
+ * @returns the Markdown, with one sentinel per embedded image, and the collected `images`.
+ */
+export async function convertBuffer(buf, name) {
+  const images = []
+  return { md: await convertTo(buf, name, 0, images), images }
+}
+
+async function convertTo(buf, name, depth, images) {
   const ext = extOf(name)
   switch (ext) {
-    case 'docx': return docx(buf)
+    case 'docx': return docx(buf, images)
     case 'xlsx': return xlsx(buf)
-    case 'pptx': return pptx(buf)
+    case 'pptx': return pptx(buf, images)
     case 'pdf': return pdf(buf)
-    case 'zip': return zipFile(buf, depth)
+    case 'zip': return zipFile(buf, depth, images)
     case 'html': case 'htm': return td.turndown(buf.toString('utf8'))
     case 'csv': return rowsToMarkdown(parseDelimited(buf.toString('utf8'), ','))
     case 'tsv': return rowsToMarkdown(parseDelimited(buf.toString('utf8'), '\t'))
