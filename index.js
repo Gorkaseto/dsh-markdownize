@@ -136,14 +136,15 @@ export function apply(ctx) {
   ctx.tools.register(defineTool({
     name: 'convert_to_markdown',
     description:
-      `FIRST ACTION for any supported local document: call this tool to extract its readable content as Markdown before opening, inspecting, summarizing, or passing the file to another tool. Do not call an Office/document plugin for the file. Supported: ${SUPPORTED.join(', ')} ` +
+      `Use this tool before analyzing, summarizing, answering questions about, or passing a supported local document to another tool. This includes attached or workspace PowerPoint (.pptx) presentations: convert the presentation first, then use the returned Markdown as the source for your answer. Do not read document bytes or use another document converter when this tool is available. Supported: ${SUPPORTED.join(', ')} ` +
       `(also ${MARKITDOWN_EXTRA.join(', ')} when Microsoft MarkItDown is installed and selected). ` +
-      'Use this for PDF, Word, PowerPoint, Excel, HTML, CSV and ZIP files instead of reading them as raw bytes. ' +
+      'For PPTX, the Markdown follows slide order and includes extracted slide text, speaker notes, and markers for embedded images. ' +
       'URLs are not supported; use the web tools for those. ' +
       'Images embedded in DOCX/PPTX appear as [Image N: alt text] markers; when the current model accepts images ' +
-      'and the plugin settings allow it, each image follows its marker. Pass include_images: false when only the text matters.',
+      'and the plugin settings allow it, each image follows its marker. Text inside images is not extracted as slide text. ' +
+      'Pass include_images: false when only text and notes matter. Supported local formats: PDF, DOCX, PPTX, XLSX, HTML, CSV, JSON, XML, TXT, Markdown, and ZIP.',
     parameters: {
-      path: { type: 'string', required: true, description: 'Path to the file (absolute, or relative to the working directory)' },
+      path: { type: 'string', required: true, description: 'Path to the actual local file (absolute, or relative to the working directory), including its extension, e.g. a .pptx path' },
       max_chars: { type: 'number', description: `Truncate the result to this many characters (default ${DEFAULT_MAX_CHARS})` },
       include_images: { type: 'boolean', description: 'Include embedded images when the model and the plugin settings allow it (default true). false returns text markers only.' },
     },
