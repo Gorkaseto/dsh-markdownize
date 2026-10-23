@@ -136,7 +136,7 @@ export function apply(ctx) {
   ctx.tools.register(defineTool({
     name: 'convert_to_markdown',
     description:
-      `For any supported local document, call this tool to extract its readable content as Markdown. Do not use another Office/document plugin or read the file as raw bytes when this tool is available. Supported: ${SUPPORTED.join(', ')} ` +
+      `FIRST ACTION for any supported local document: call this tool to extract its readable content as Markdown before opening, inspecting, summarizing, or passing the file to another tool. Do not call an Office/document plugin for the file. Supported: ${SUPPORTED.join(', ')} ` +
       `(also ${MARKITDOWN_EXTRA.join(', ')} when Microsoft MarkItDown is installed and selected). ` +
       'Use this for PDF, Word, PowerPoint, Excel, HTML, CSV and ZIP files instead of reading them as raw bytes. ' +
       'URLs are not supported; use the web tools for those. ' +
