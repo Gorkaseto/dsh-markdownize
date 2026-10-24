@@ -1,6 +1,6 @@
 {
   "name": "dsh-markdownize",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "Apache-2.0",
   "author": "gorkaseto",
   "description": "Converts documents (PDF, Word, PowerPoint, Excel, HTML, CSV, JSON, ZIP…) to Markdown so LLMs can read them. Bundled JavaScript engine, or Microsoft MarkItDown when installed.",
@@ -17,6 +17,7 @@
     "client.js",
     "convert.js",
     "engine.js",
+    "images.js",
     "vendor",
     "cordis.patch.yml",
     "locale/*.json",

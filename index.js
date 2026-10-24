@@ -4,6 +4,7 @@ import { basename, join, resolve } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { SUPPORTED, extOf } from './convert.js'
 import { MARKITDOWN_EXTRA, createEngines } from './engine.js'
+import { OUTPUT_SCHEMA, imagesAsText, imagesInline, renderValue, truncateMarkdown } from './images.js'
 
 export const name = 'dsh-markdownize'
 export const inject = ['tools']
@@ -18,12 +19,14 @@ const ALL_FORMATS = [...SUPPORTED, ...MARKITDOWN_EXTRA]
 // convert it and write the full Markdown (no truncation) to a temp file the Client opens in the
 // right Sidebar preview. The plugin page reads and sets the engine through the same service.
 // Served by the Gateway's SRC fallback (plain service + remote-methods marker).
-async function writeDebugMarkdown({ md, engine }, leaf) {
+// Debug output never reaches a model, so embedded images always show as text markers.
+async function writeDebugMarkdown({ md: raw, images, engine }, leaf) {
+  const md = imagesAsText(raw, images)
   await mkdir(DEBUG_DIR, { recursive: true })
   const stem = leaf.replace(/[^\w.-]+/g, '_')
   const path = join(DEBUG_DIR, `${stem}.${Date.now().toString(36)}.md`)
   await writeFile(path, md, 'utf8')
-  return { path, chars: md.length, engine }
+  return { path, chars: md.length, engine, images: images.length }
 }
 
 function leafOf(name) {
@@ -82,6 +85,14 @@ class MarkdownizeService {
     return this.engines.configure(engine, command)
   }
 
+  /**
+   * @param images - `inline` (images reach image-capable models) or `none` (text markers only).
+   * @param maxImages - most images sent per conversion.
+   */
+  async configureImages(images, maxImages) {
+    return this.engines.configureImages(images, maxImages)
+  }
+
   /** Search for MarkItDown again (after installing it). */
   async redetect() {
     return this.engines.redetect()
@@ -91,10 +102,29 @@ Object.defineProperty(MarkdownizeService.prototype, REMOTE_MARK, {
   configurable: true,
   value: Object.freeze({
     version: 1,
-    methods: Object.freeze(['convert', 'convertPath', 'status', 'configure', 'redetect']
+    methods: Object.freeze(['convert', 'convertPath', 'status', 'configure', 'configureImages', 'redetect']
       .map((method) => Object.freeze({ method, invocation: Object.freeze({ kind: 'direct' }) }))),
   }),
 })
+
+/**
+ * Why the calling model cannot take images, or undefined when it can. Same route resolution as the
+ * harness's `read_image`: the session's latest request header, then the agent options.
+ */
+async function imageRefusal(ctx, exec) {
+  if (ctx.get('attachments') === undefined) return 'no attachment service is mounted'
+  const routed = exec.agent?.session.requestHeader()?.config
+  const provider = routed?.provider ?? exec.agent?.options.provider
+  const model = routed?.model ?? exec.agent?.options.model
+  const llm = ctx.get('llm')
+  if (provider === undefined || model === undefined || llm === undefined) return 'the current model could not be resolved'
+  try {
+    const info = await llm.resolveModelInfo(provider, model, exec.signal)
+    if (!info.inputModalities?.includes('image')) return `model "${model}" does not accept image input`
+  } catch {
+    return `model "${model}" could not be checked for image input`
+  }
+}
 
 export function apply(ctx) {
   const home = ctx.get('profileContext')?.home ?? process.env.DSH_HOME ?? join(homedir(), '.dsh')
@@ -106,17 +136,21 @@ export function apply(ctx) {
   ctx.tools.register(defineTool({
     name: 'convert_to_markdown',
     description:
-      `Convert a LOCAL document to Markdown so it can be read as text. Supported: ${SUPPORTED.join(', ')} ` +
+      `Use this tool before analyzing, summarizing, answering questions about, or passing a supported local document to another tool. This includes attached or workspace PowerPoint (.pptx) presentations: convert the presentation first, then use the returned Markdown as the source for your answer. Do not read document bytes or use another document converter when this tool is available. Supported: ${SUPPORTED.join(', ')} ` +
       `(also ${MARKITDOWN_EXTRA.join(', ')} when Microsoft MarkItDown is installed and selected). ` +
-      'Use this for PDF, Word, PowerPoint, Excel, HTML, CSV and ZIP files instead of reading them as raw bytes. ' +
-      'URLs are not supported; use the web tools for those.',
+      'For PPTX, the Markdown follows slide order and includes extracted slide text, speaker notes, and markers for embedded images. ' +
+      'URLs are not supported; use the web tools for those. ' +
+      'Images embedded in DOCX/PPTX appear as [Image N: alt text] markers; when the current model accepts images ' +
+      'and the plugin settings allow it, each image follows its marker. Text inside images is not extracted as slide text. ' +
+      'Pass include_images: false when only text and notes matter. Supported local formats: PDF, DOCX, PPTX, XLSX, HTML, CSV, JSON, XML, TXT, Markdown, and ZIP.',
     parameters: {
-      path: { type: 'string', required: true, description: 'Path to the file (absolute, or relative to the working directory)' },
+      path: { type: 'string', required: true, description: 'Path to the actual local file (absolute, or relative to the working directory), including its extension, e.g. a .pptx path' },
       max_chars: { type: 'number', description: `Truncate the result to this many characters (default ${DEFAULT_MAX_CHARS})` },
+      include_images: { type: 'boolean', description: 'Include embedded images when the model and the plugin settings allow it (default true). false returns text markers only.' },
     },
     output: {
-      schema: { type: 'string' },
-      render: (_args, value) => [{ type: 'text', text: value }],
+      schema: OUTPUT_SCHEMA,
+      render: (_args, value) => renderValue(value),
     },
     // Pure function of args: runs on live streaming AND on session-log replay.
     presentCall: (args) => ({
@@ -131,11 +165,18 @@ export function apply(ctx) {
       if (/^[a-z][a-z0-9+.-]*:\/\//i.test(p)) throw new Error('URLs are not supported; pass a local file path')
       const abs = resolve(p)
       await checkedFile(abs)
-      const { md } = await engines.convertFile(abs, { signal: exec.signal })
+      const { md: full, images } = await engines.convertFile(abs, { signal: exec.signal })
       const limit = Math.max(1, Math.floor(args.max_chars ?? DEFAULT_MAX_CHARS))
-      return md.length > limit
-        ? `${md.slice(0, limit)}\n\n[truncated: ${md.length - limit} more characters. Call again with a larger max_chars.]`
-        : md
+      const { md, cut } = truncateMarkdown(full, limit)
+      const tail = cut ? `\n\n[truncated: ${cut} more characters. Call again with a larger max_chars.]` : ''
+      if (!images.length) return md + tail
+      const settings = await engines.imageSettings()
+      if (settings.images === 'none') return imagesAsText(md, images, 'disabled in the plugin settings') + tail
+      if (args.include_images === false) return imagesAsText(md, images) + tail
+      const refusal = await imageRefusal(ctx, exec)
+      if (refusal) return imagesAsText(md, images, refusal) + tail
+      const value = await imagesInline(md, images, { attachments: ctx.get('attachments'), max: settings.maxImages })
+      return typeof value === 'string' ? value + tail : { ...value, markdown: value.markdown + tail }
     },
   }))
 }

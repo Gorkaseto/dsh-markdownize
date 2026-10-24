@@ -15,6 +15,7 @@
  * The plugin's page (Plugins → dsh-markdownize, `plugins.bundle.config` keyed by the package name)
  * shows which engines are available — the bundled JS port and Microsoft's MarkItDown (Python) —
  * and, when both are, lets the user pick one (`markdownize/status`, `configure`, `redetect`).
+ * The same page sets how images embedded in DOCX/PPTX reach the model (`configureImages`).
  */
 window.__ModuleLoader__.load({
   id: 'dsh-markdownize',
@@ -95,6 +96,12 @@ window.__ModuleLoader__.load({
       'save': 'Save',
       'redetect': 'Search again',
       'saved': 'Saved',
+      'images.title': 'Images in documents',
+      'images.inline': 'Send them to the model when it accepts images',
+      'images.none': 'Text markers only ([Image N: alt text])',
+      'images.max': 'Most images per conversion',
+      'images.hint': 'Applies to images embedded in DOCX and PPTX, converted with the JavaScript engine. Repeated images and icons are sent once or skipped. With a model that has no image input, the markers are kept.',
+      'images.markitdown': 'MarkItDown is in use now: it does not extract images, so this setting has no effect until the JavaScript engine is used.',
     }
     const es = {
       'summary.js': 'Motor: port JavaScript incluido',
@@ -124,6 +131,12 @@ window.__ModuleLoader__.load({
       'save': 'Guardar',
       'redetect': 'Buscar de nuevo',
       'saved': 'Guardado',
+      'images.title': 'Imágenes de los documentos',
+      'images.inline': 'Enviarlas al modelo cuando acepte imágenes',
+      'images.none': 'Solo marcas de texto ([Image N: texto alternativo])',
+      'images.max': 'Máximo de imágenes por conversión',
+      'images.hint': 'Se aplica a las imágenes incrustadas en DOCX y PPTX al convertir con el motor JavaScript. Las imágenes repetidas y los iconos se envían una vez o se omiten. Con un modelo sin entrada de imágenes se mantienen las marcas.',
+      'images.markitdown': 'Ahora se usa MarkItDown: no extrae imágenes, así que este ajuste no tiene efecto hasta que se use el motor JavaScript.',
     }
     const zh = {
       ...en,
@@ -132,6 +145,7 @@ window.__ModuleLoader__.load({
       'md.name': 'Microsoft MarkItDown（Python）',
       'save': '保存',
       'redetect': '重新检测',
+      'images.title': '文档中的图片',
     }
 
     const S = {
@@ -147,6 +161,8 @@ window.__ModuleLoader__.load({
       input: { flex: '1 1 260px', minWidth: 0, padding: '5px 8px', borderRadius: 8, border: '1px solid var(--dsw-alias-separator-primary, var(--dsw-alias-label-tertiary))', background: 'transparent', color: 'inherit', font: 'inherit', fontFamily: 'var(--dsw-font-family-mono, monospace)' },
       install: { display: 'flex', alignItems: 'center', gap: 8, margin: '6px 0', padding: '6px 6px 6px 12px', borderRadius: 8, background: 'var(--dsw-alias-bg-secondary, var(--dsw-alias-fill-secondary, rgba(127,127,127,.12)))', border: '1px solid var(--dsw-alias-separator-primary, var(--dsw-alias-label-tertiary))' },
       code: { flex: 1, minWidth: 0, overflowX: 'auto', whiteSpace: 'nowrap', fontFamily: 'var(--dsw-font-family-mono, ui-monospace, Consolas, monospace)', fontSize: 13, fontWeight: 600, color: 'var(--dsw-alias-label-primary)', userSelect: 'all' },
+      number: { width: 72, padding: '5px 8px', borderRadius: 8, border: '1px solid var(--dsw-alias-separator-primary, var(--dsw-alias-label-tertiary))', background: 'transparent', color: 'inherit', font: 'inherit' },
+      section: { display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 12, borderTop: '1px solid var(--dsw-alias-separator-primary, var(--dsw-alias-label-tertiary))' },
       button: { padding: '5px 12px', borderRadius: 8, border: '1px solid var(--dsw-alias-separator-primary, var(--dsw-alias-label-tertiary))', background: 'transparent', color: 'inherit', font: 'inherit', cursor: 'pointer' },
     }
 
@@ -166,6 +182,29 @@ window.__ModuleLoader__.load({
           h('code', { style: S.code }, INSTALL_COMMAND),
           h('button', { type: 'button', style: S.button, onClick: copy }, copied ? t('copied') : t('copy'))),
         h('div', { style: S.muted }, t('md.missing.after')))
+    }
+
+    function ImagesConfig({ t, status, busy, apply, api }) {
+      const [max, setMax] = useState(String(status.maxImages))
+      const [saved, setSaved] = useState(false)
+      useEffect(() => { setMax(String(status.maxImages)) }, [status.maxImages])
+      const parsed = Number(max)
+      const valid = Number.isInteger(parsed) && parsed >= 1 && parsed <= 50
+      return h('div', { style: S.section },
+        h('div', { style: S.title }, t('images.title')),
+        h('fieldset', { style: S.fieldset, disabled: busy },
+          ['inline', 'none'].map((mode) => h('label', { key: mode, style: S.radio },
+            h('input', { type: 'radio', name: 'dsh-markdownize-images', checked: status.images === mode, onChange: () => apply(api.configureImages(mode, status.maxImages)) }),
+            t(`images.${mode}`)))),
+        h('div', { style: S.row },
+          h('label', { htmlFor: 'dsh-markdownize-max-images', style: S.muted }, t('images.max')),
+          h('input', { id: 'dsh-markdownize-max-images', type: 'number', min: 1, max: 50, step: 1, style: S.number, value: max, disabled: busy || status.images === 'none',
+            onChange: (e) => { setMax(e.target.value); setSaved(false) } }),
+          h('button', { type: 'button', style: S.button, disabled: busy || !valid || parsed === status.maxImages,
+            onClick: () => apply(api.configureImages(status.images, parsed)).then((s) => { if (s) setSaved(true) }) }, t('save')),
+          saved && h('span', { style: S.muted }, t('saved'))),
+        h('div', { style: S.muted }, t('images.hint')),
+        status.active === 'markitdown' && h('div', { style: S.muted }, t('images.markitdown')))
     }
 
     function EngineConfig({ t, view, api }) {
@@ -225,6 +264,7 @@ window.__ModuleLoader__.load({
             h('button', { type: 'button', style: S.button, disabled: busy, onClick: () => apply(api.redetect()) }, t('redetect')),
             saved && h('span', { style: S.muted }, t('saved'))),
           h('div', { style: S.muted }, t('command.hint'))),
+        h(ImagesConfig, { t, status, busy, apply, api }),
         error && h('div', { style: S.error }, t('error', { message: error })))
     }
 
@@ -245,6 +285,7 @@ window.__ModuleLoader__.load({
         const api = {
           status: () => call('markdownize/status', {}),
           configure: (engine, command) => call('markdownize/configure', { engine, command }),
+          configureImages: (images, maxImages) => call('markdownize/configureImages', { images, maxImages }),
           redetect: () => call('markdownize/redetect', {}),
         }
         ctx.slots.inject(CONFIG_SLOT, () => ctx.slots.register({
@@ -286,9 +327,10 @@ window.__ModuleLoader__.load({
           try {
             for (const job of jobs) {
               try {
-                const { path, chars, engine } = await job.run()
+                const { path, chars, engine, images } = await job.run()
                 ctx.sidebarRight.openResource(sessionFileAddress(sessionId, path))
-                input.notify('info', `Markdownize debug [${engine}]: ${job.name} → ${chars} chars (${path})`)
+                const pictures = images ? `, ${images} image(s) as markers` : ''
+                input.notify('info', `Markdownize debug [${engine}]: ${job.name} → ${chars} chars${pictures} (${path})`)
               } catch (error) {
                 input.notify('error', `Markdownize debug: ${job.name}: ${errorText(error)}`)
               }

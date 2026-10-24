@@ -3,11 +3,14 @@
 //   auto       — MarkItDown when detected, else JS
 //   markitdown — MarkItDown only (fails when it is not available)
 //   js         — the bundled port only
+// The same file holds the image settings: whether images embedded in DOCX/PPTX reach the model
+// (`inline`, when the model accepts image input) or stay as text markers (`none`), and how many.
 import { execFile } from 'node:child_process'
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { SUPPORTED, convertBuffer, extOf } from './convert.js'
+import { DEFAULT_MAX_IMAGES, IMAGE_MODES } from './images.js'
 
 export const ENGINES = ['auto', 'markitdown', 'js']
 // Formats only MarkItDown reads; the JS port rejects them.
@@ -18,6 +21,9 @@ const DETECT_TIMEOUT_MS = 20_000
 const CONVERT_TIMEOUT_MS = 180_000
 // Python on Windows writes the console code page unless told otherwise.
 const PY_ENV = { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }
+const MAX_IMAGES_LIMIT = 50
+
+const imageCount = (n) => (Number.isInteger(n) && n >= 1 && n <= MAX_IMAGES_LIMIT ? n : DEFAULT_MAX_IMAGES)
 
 /** Split a user-typed command line; double quotes group a path with spaces. */
 export function parseCommand(line) {
@@ -36,7 +42,7 @@ function run(argv, timeout, signal) {
 }
 
 export function createEngines({ settingsPath }) {
-  let settings = { engine: 'auto', command: '' }
+  let settings = { engine: 'auto', command: '', images: 'inline', maxImages: DEFAULT_MAX_IMAGES }
   let loaded = null
   let detection = null // Promise<{ argv, version } | null>
 
@@ -46,6 +52,8 @@ export function createEngines({ settingsPath }) {
       settings = {
         engine: ENGINES.includes(raw?.engine) ? raw.engine : 'auto',
         command: typeof raw?.command === 'string' ? raw.command : '',
+        images: IMAGE_MODES.includes(raw?.images) ? raw.images : 'inline',
+        maxImages: imageCount(raw?.maxImages),
       }
     },
     () => {},
@@ -81,6 +89,8 @@ export function createEngines({ settingsPath }) {
     return {
       engine: settings.engine,
       command: settings.command,
+      images: settings.images,
+      maxImages: settings.maxImages,
       markitdown: found ? { version: found.version, command: found.argv.join(' ') } : null,
       active: settings.engine === 'js' || (settings.engine === 'auto' && !found) ? 'js' : found ? 'markitdown' : null,
     }
@@ -124,35 +134,51 @@ export function createEngines({ settingsPath }) {
       await load()
       if (!ENGINES.includes(engine)) throw new Error(`engine must be one of ${ENGINES.join(', ')}`)
       const commandChanged = typeof command === 'string' && command.trim() !== settings.command
-      settings = { engine, command: typeof command === 'string' ? command.trim() : settings.command }
+      settings = { ...settings, engine, command: typeof command === 'string' ? command.trim() : settings.command }
       await save()
       if (commandChanged) detect(true)
       return status()
+    },
+    async configureImages(images, maxImages) {
+      await load()
+      if (!IMAGE_MODES.includes(images)) throw new Error(`images must be one of ${IMAGE_MODES.join(', ')}`)
+      if (!Number.isInteger(maxImages) || maxImages < 1 || maxImages > MAX_IMAGES_LIMIT) throw new Error(`maxImages must be an integer from 1 to ${MAX_IMAGES_LIMIT}`)
+      settings = { ...settings, images, maxImages }
+      await save()
+      return status()
+    },
+    /** The saved image mode and per-conversion image limit. */
+    async imageSettings() {
+      await load()
+      return { images: settings.images, maxImages: settings.maxImages }
     },
     async redetect() {
       await detect(true)
       return status()
     },
 
-    /** Convert a file on disk. `buf` may be passed when already read. */
+    /**
+     * Convert a file on disk. `buf` may be passed when already read. The Markdown holds a sentinel
+     * per embedded image (see images.js); only the JS engine extracts images.
+     */
     async convertFile(path, { buf, signal } = {}) {
       const engine = await pick()
       checkFormat(engine.kind, path)
-      if (engine.kind === 'markitdown') return { md: await viaMarkItDown(engine.argv, path, signal), engine: 'markitdown' }
-      return { md: await convertBuffer(buf ?? await readFile(path, { signal }), path), engine: 'js' }
+      if (engine.kind === 'markitdown') return { md: await viaMarkItDown(engine.argv, path, signal), images: [], engine: 'markitdown' }
+      return { ...await convertBuffer(buf ?? await readFile(path, { signal }), path), engine: 'js' }
     },
 
     /** Convert in-memory bytes named `leaf` (a browser attachment). */
     async convertBytes(buf, leaf) {
       const engine = await pick()
       checkFormat(engine.kind, leaf)
-      if (engine.kind === 'js') return { md: await convertBuffer(buf, leaf), engine: 'js' }
+      if (engine.kind === 'js') return { ...await convertBuffer(buf, leaf), engine: 'js' }
       // MarkItDown picks its converter from the extension, so keep the real file name.
       const dir = await mkdtemp(join(tmpdir(), 'dsh-markdownize-in-'))
       try {
         const file = join(dir, leaf)
         await writeFile(file, buf)
-        return { md: await viaMarkItDown(engine.argv, file), engine: 'markitdown' }
+        return { md: await viaMarkItDown(engine.argv, file), images: [], engine: 'markitdown' }
       } finally {
         await rm(dir, { recursive: true, force: true })
       }

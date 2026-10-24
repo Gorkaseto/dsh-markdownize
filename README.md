@@ -19,6 +19,9 @@ to the model.
   - its **own engine**, a pure-JavaScript port of MarkItDown's offline
     converters, bundled with the plugin and always available;
   - **Microsoft MarkItDown** (Python), used when it is installed.
+- **Images in DOCX and PPTX.** Embedded images become `[Image N: alt text]`
+  markers. When the current model accepts images, each image is sent right
+  after its marker.
 - **Debug mode.** Preview the Markdown a file turns into from the web
   composer (**Ctrl+Shift+M**). Nothing is sent to the model.
 
@@ -80,9 +83,45 @@ When both are available, choose:
 - **Always JavaScript**.
 
 The choice and the custom command are saved in
-`<dshHome>/storages/dsh-markdownize/settings.json`. They apply to both the
-tool and debug mode. MarkItDown is detected once per Host start; press
+`<dshHome>/storages/dsh-markdownize/settings.json`, together with the image
+settings. They apply to both the tool and debug mode. MarkItDown is detected once per Host start; press
 **Search again** after installing it.
+
+## Images in documents
+
+The JavaScript engine extracts the images embedded in DOCX and PPTX files
+(including those inside a ZIP). Each one leaves a marker where it sat: in the
+text for DOCX, after the slide's text for PPTX.
+
+```
+[Image 1: Sales by quarter]
+[Image 2]
+[Image 3: Company logo — same as image 1]
+[Image 4: Vector logo — format not supported]
+```
+
+The plugin's page sets what happens next:
+
+- **Send them to the model when it accepts images** (the default). The tool
+  checks the current model's declared input modalities, as the harness's
+  `read_image` does. With an image-capable model, each image is stored as an
+  attachment and sent right after its marker. With a text-only model, such as
+  DeepSeek's, only the markers are sent, followed by a note saying why.
+- **Text markers only.** Images are never sent.
+
+**Most images per conversion** (1–50, 10 by default) caps what one call sends,
+and never exceeds the harness's own per-message image limit. Images past the
+cap keep their marker with a note. The model can also pass
+`include_images: false` to get the markers only; it cannot override the
+settings.
+
+Repeated images (a logo on every slide) are sent once. Icons smaller than
+32 px on both sides are skipped when they have no alt text. PNG, JPEG, GIF
+and WebP are sent; EMF, WMF and TIFF keep a marker only. Debug mode always
+shows markers.
+
+MarkItDown does not extract images, so these settings have no effect while
+it is the engine in use.
 
 ## Install
 
@@ -128,18 +167,20 @@ unsupported formats are skipped.
   level deep.
 - Tool output is truncated at 100,000 characters by default.
 
-**Not covered:** OCR of scanned documents, audio transcription, YouTube,
-image captioning, Azure Document Intelligence, and the legacy `.doc` and
-`.ppt` formats.
+**Not covered:** OCR of scanned documents, images in PDFs, image captioning
+for text-only models, audio transcription, YouTube, Azure Document
+Intelligence, and the legacy `.doc` and `.ppt` formats.
 
 ## Structure
 
 - `index.js` — the Host half. It registers the `convert_to_markdown` tool and
   the `markdownize` service (`convert`, `convertPath`, `status`, `configure`,
-  `redetect`), served through the Gateway's SRC fallback.
+  `configureImages`, `redetect`), served through the Gateway's SRC fallback.
 - `engine.js` — engine selection, MarkItDown detection and invocation, and
   the saved settings.
 - `convert.js` — the JavaScript engine.
+- `images.js` — embedded images: markers, model hand-off, and the tool's
+  output schema.
 - `client.js` — the Client half: the engine page under **Plugins**, the
   debug-mode shortcut, and the `en` / `es` / `zh` UI strings.
 - `locale/` — the plugin's localized title and description.
